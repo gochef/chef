@@ -23,13 +23,15 @@ type (
 		middlewares []Handler
 		after       []Handler
 		config      Config
+		maxParam    *int
 	}
 )
 
 // Error Handlers
 var (
 	NotFoundHandler = func(c Context) {
-		http.NotFoundHandler()
+		c.SetStatusCode(http.StatusNotFound)
+		c.WriteString("Error 404: not found")
 	}
 
 	MethodNotAllowedHandler = func(c Context) {
@@ -44,11 +46,12 @@ func NewRouter(config Config) *Router {
 		tree: &node{
 			methodHandler: new(methodHandler),
 		},
-		routes: map[string]*route{},
-		config: config,
+		routes:   map[string]*route{},
+		config:   config,
+		maxParam: new(int),
 	}
 	r.pool.New = func() interface{} {
-		return NewContext(nil, nil)
+		return NewContext(nil, nil, r.maxParam)
 	}
 
 	return r
@@ -66,17 +69,18 @@ func (r *Router) add(method, path string, h Handler, hs []Handler) {
 	pnames := []string{} // Param names
 	ppath := path        // Pristine path
 
-	handlers := append(r.middlewares, h)
+	handlers := r.middlewares
 	if hs != nil {
 		handlers = append(handlers, hs...)
 	}
+	handlers = append(handlers, h)
 	handlers = append(handlers, r.after...)
 
 	for i, l := 0, len(path); i < l; i++ {
 		if path[i] == ':' {
 			j := i + 1
 
-			r.tree.insert(method, path[:i], nil, skind, "", nil)
+			r.insert(method, path[:i], nil, skind, "", nil)
 			for ; i < l && path[i] != '/'; i++ {
 			}
 
@@ -85,19 +89,19 @@ func (r *Router) add(method, path string, h Handler, hs []Handler) {
 			i, l = j, len(path)
 
 			if i == l {
-				r.tree.insert(method, path[:i], handlers, pkind, ppath, pnames)
+				r.insert(method, path[:i], handlers, pkind, ppath, pnames)
 				return
 			}
-			r.tree.insert(method, path[:i], nil, pkind, ppath, pnames)
+			r.insert(method, path[:i], nil, pkind, ppath, pnames)
 		} else if path[i] == '*' {
-			r.tree.insert(method, path[:i], nil, skind, "", nil)
+			r.insert(method, path[:i], nil, skind, "", nil)
 			pnames = append(pnames, "*")
-			r.tree.insert(method, path[:i+1], handlers, akind, ppath, pnames)
+			r.insert(method, path[:i+1], handlers, akind, ppath, pnames)
 			return
 		}
 	}
 
-	r.tree.insert(method, path, handlers, skind, ppath, pnames)
+	r.insert(method, path, handlers, skind, ppath, pnames)
 }
 
 func (r *Router) ServeHTTP(res http.ResponseWriter, req *http.Request) {
@@ -111,6 +115,7 @@ func (r *Router) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		path = req.URL.Path
 	}
 
-	r.tree.find(method, path, ctx)
+	r.Find(method, path, ctx)
+
 	ctx.Next()
 }

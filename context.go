@@ -29,6 +29,7 @@ type (
 		QueryParam(key string) string
 		QueryParams() url.Values
 		Set(key string, data interface{})
+		Remove(key string)
 		Get(key string) interface{}
 		GetAll() Data
 		GetInt(key string) int
@@ -66,8 +67,14 @@ type (
 )
 
 // NewContext returns a context instance
-func NewContext(req *http.Request, res http.ResponseWriter) Context {
-	return &context{}
+func NewContext(req *http.Request, res http.ResponseWriter, maxParam *int) Context {
+	return &context{
+		pvalues:  make([]string, *maxParam),
+		params:   make(map[string]string),
+		request:  req,
+		response: res,
+		data:     make(Data),
+	}
 }
 
 func (c *context) SetHandlers(h []Handler) {
@@ -122,11 +129,7 @@ func (c *context) QueryString() string {
 }
 
 func (c *context) QueryParam(key string) string {
-	if c.query == nil {
-		c.query = c.request.URL.Query()
-	}
-
-	return c.query.Get(key)
+	return c.QueryParams().Get(key)
 }
 
 func (c *context) QueryParams() url.Values {
@@ -143,6 +146,12 @@ func (c *context) Set(key string, data interface{}) {
 	}
 
 	c.data[key] = data
+	c.lock.Unlock()
+}
+
+func (c *context) Remove(key string) {
+	c.lock.Lock()
+	delete(c.data, key)
 	c.lock.Unlock()
 }
 
@@ -188,7 +197,11 @@ func (c *context) reset(req *http.Request, res http.ResponseWriter, config Confi
 	c.nextIndex = -1
 	c.request = req
 	c.response = res
-	c.handlers = nil
+	c.path = ""
+	c.pnames = nil
+	c.handlers = []Handler{
+		NotFoundHandler,
+	}
 
 	if config.Session.Use {
 		c.session = session.GetDriver(config.Session, req, res)
@@ -203,7 +216,7 @@ func (c *context) Next() {
 	c.nextIndex++
 	lenHandlers := len(c.handlers)
 
-	if (lenHandlers > 0) && (c.nextIndex <= lenHandlers) {
+	if (lenHandlers > 0) && (c.nextIndex < lenHandlers) {
 		c.handlers[c.nextIndex](c)
 	}
 }

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultLogFormat = "[%{module}:%{level}] %{message}"
+	defaultLogFormat = "[%{module}.%{shortfunc}.%{level} %{time:15:04:05}] %{message}"
 )
 
 // Log levels.
@@ -45,6 +45,7 @@ type (
 		// enable colors
 		Colored bool
 		Backend string
+		File    string
 		Modules []string
 		Output  io.Writer
 	}
@@ -62,10 +63,7 @@ func NewLogger(config *LoggerConfig) *Logger {
 		config: config,
 	}
 
-	l.initLevel().
-		setFormat().
-		setLevels().
-		setBackend()
+	l.initLevel().setBackends()
 
 	return l
 }
@@ -79,32 +77,40 @@ func (l *Logger) initLevel() *Logger {
 	return l
 }
 
-func (l *Logger) setLevels() *Logger {
+func (l *Logger) setLevel(b logging.LeveledBackend) {
 	for _, s := range l.config.Modules {
-		logging.SetLevel(logging.Level(l.config.level), s)
+		b.SetLevel(logging.Level(l.config.level), s)
 	}
-	return l
 }
 
-func (l *Logger) setFormat() *Logger {
+func (l *Logger) setBackends() *Logger {
 	format := logging.MustStringFormatter(l.config.Format)
-	logging.SetFormatter(format)
+	screenBackend := l.getScreenBackend(format)
+	fileBackend := l.getFileBackend(format)
+
+	logging.SetBackend(screenBackend, fileBackend)
+
 	return l
 }
 
-func (l *Logger) setBackend() *Logger {
-	switch l.config.Backend {
-	case "os.stdout":
-		l.config.Output = os.Stdout
-	default:
-		l.config.Output = os.Stdout
+func (l *Logger) getFileBackend(format logging.Formatter) logging.Backend {
+	file, err := os.OpenFile(l.config.File, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0777)
+	if err != nil {
+		panic(err)
 	}
+	backendFile := logging.NewLogBackend(file, "", 0)
+	backendFileFormatter := logging.NewBackendFormatter(backendFile, format)
+	backendFile.Color = l.config.Colored
+	backendFileLeveled := logging.AddModuleLevel(backendFileFormatter)
+	return backendFileLeveled
+}
 
-	backend := logging.NewLogBackend(l.config.Output, "", 0)
-	backend.Color = l.config.Colored
-	logging.SetBackend(backend)
-
-	return l
+func (l *Logger) getScreenBackend(format logging.Formatter) logging.LeveledBackend {
+	backendScreen := logging.NewLogBackend(os.Stdout, "", 0)
+	backendScreen.Color = l.config.Colored
+	backendScreenFormatter := logging.NewBackendFormatter(backendScreen, format)
+	backendScreenLeveled := logging.AddModuleLevel(backendScreenFormatter)
+	return backendScreenLeveled
 }
 
 func (l *Logger) GetModuleLogger(module string) *Logger {

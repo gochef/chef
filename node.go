@@ -1,7 +1,5 @@
 package chef
 
-import "fmt"
-
 type (
 	kind uint8
 	node struct {
@@ -47,6 +45,94 @@ var (
 		TRACE,
 	}
 )
+
+func (r *Router) insert(method, path string, h []Handler, t kind, ppath string, pnames []string) {
+	l := len(pnames)
+	if *r.maxParam < l {
+		*r.maxParam = l
+	}
+
+	cn := r.tree // Current node as root
+	if cn == nil {
+		panic("chef: invalid method")
+	}
+	search := path
+
+	for {
+		sl := len(search)
+		pl := len(cn.prefix)
+		l := 0
+
+		// LCP
+		max := pl
+		if sl < max {
+			max = sl
+		}
+		for ; l < max && search[l] == cn.prefix[l]; l++ {
+		}
+
+		if l == 0 {
+			// At root node
+			cn.label = search[0]
+			cn.prefix = search
+			if h != nil {
+				cn.kind = t
+				cn.addHandler(method, h)
+				cn.ppath = ppath
+				cn.pnames = pnames
+			}
+		} else if l < pl {
+			// Split node
+			n := newNode(cn.kind, cn.prefix[l:], cn, cn.children, cn.methodHandler, cn.ppath, cn.pnames)
+
+			// Reset parent node
+			cn.kind = skind
+			cn.label = cn.prefix[0]
+			cn.prefix = cn.prefix[:l]
+			cn.children = nil
+			cn.methodHandler = new(methodHandler)
+			cn.ppath = ""
+			cn.pnames = nil
+
+			cn.addChild(n)
+
+			if l == sl {
+				// At parent node
+				cn.kind = t
+				cn.addHandler(method, h)
+				cn.ppath = ppath
+				cn.pnames = pnames
+			} else {
+				// Create child node
+				n = newNode(t, search[l:], cn, nil, new(methodHandler), ppath, pnames)
+				n.addHandler(method, h)
+				cn.addChild(n)
+			}
+		} else if l < sl {
+			search = search[l:]
+			c := cn.findChildWithLabel(search[0])
+			if c != nil {
+				// Go deeper
+				cn = c
+				continue
+			}
+			// Create child node
+			n := newNode(t, search, cn, nil, new(methodHandler), ppath, pnames)
+			n.addHandler(method, h)
+			cn.addChild(n)
+		} else {
+			// Node already exists
+			if h != nil {
+				cn.addHandler(method, h)
+				cn.ppath = ppath
+				if len(cn.pnames) == 0 { // Issue #729
+					cn.pnames = pnames
+				}
+			}
+		}
+		return
+	}
+}
 
 func newNode(t kind, pre string, p *node, c children, mh *methodHandler, ppath string, pnames []string) *node {
 	return &node{
@@ -155,88 +241,6 @@ func (n *node) checkMethodNotAllowed() []Handler {
 	return hs
 }
 
-func (n *node) insert(method, path string, h []Handler, t kind, ppath string, pnames []string) {
-	if n == nil {
-		panic("chef: invalid method")
-	}
-	search := path
-
-	for {
-		sl := len(search)
-		pl := len(n.prefix)
-		l := 0
-
-		// LCP
-		max := pl
-		if sl < max {
-			max = sl
-		}
-		for ; l < max && search[l] == n.prefix[l]; l++ {
-		}
-
-		if l == 0 {
-			// At root node
-			n.label = search[0]
-			n.prefix = search
-			if h != nil {
-				n.kind = t
-				n.addHandler(method, h)
-				n.ppath = ppath
-				n.pnames = pnames
-			}
-		} else if l < pl {
-			// Split node
-			nNode := newNode(n.kind, n.prefix[l:], n, n.children, n.methodHandler, n.ppath, n.pnames)
-
-			// Reset parent node
-			n.kind = skind
-			n.label = n.prefix[0]
-			n.prefix = n.prefix[:l]
-			n.children = nil
-			n.methodHandler = new(methodHandler)
-			n.ppath = ""
-			n.pnames = nil
-
-			n.addChild(nNode)
-
-			if l == sl {
-				// At parent node
-				n.kind = t
-				n.addHandler(method, h)
-				n.ppath = ppath
-				n.pnames = pnames
-			} else {
-				// Create child node
-				nNode = newNode(t, search[l:], n, nil, new(methodHandler), ppath, pnames)
-				nNode.addHandler(method, h)
-				n.addChild(nNode)
-			}
-		} else if l < sl {
-			search = search[l:]
-			c := n.findChildWithLabel(search[0])
-			if c != nil {
-				// Go deeper
-				n = c
-				continue
-			}
-			// Create child node
-			nNode := newNode(t, search, n, nil, new(methodHandler), ppath, pnames)
-			nNode.addHandler(method, h)
-			n.addChild(nNode)
-		} else {
-			// Node already exists
-			if h != nil {
-				n.addHandler(method, h)
-				n.ppath = ppath
-				if len(n.pnames) == 0 { // Issue #729
-					n.pnames = pnames
-				}
-			}
-		}
-		return
-	}
-}
-
 // Find lookup a handler registered for method and path. It also parses URL for path
 // parameters and load them into context.
 //
@@ -245,14 +249,15 @@ func (n *node) insert(method, path string, h []Handler, t kind, ppath string, pn
 // - Get context from `Echo#AcquireContext()`
 // - Reset it `Context#Reset()`
 // - Return it `Echo#ReleaseContext()`.
-func (n *node) find(method, path string, c Context) {
+func (r *Router) Find(method, path string, c Context) {
 	ctx := c.(*context)
 	ctx.path = path
+	cn := r.tree // Current node as root
 
 	var (
 		search  = path
 		child   *node         // Child node
-		nc      int           // Param counter
+		n       int           // Param counter
 		nk      kind          // Next kind
 		nn      *node         // Next node
 		ns      string        // Next search
@@ -268,16 +273,16 @@ func (n *node) find(method, path string, c Context) {
 		pl := 0 // Prefix length
 		l := 0  // LCP length
 
-		if n.label != ':' {
+		if cn.label != ':' {
 			sl := len(search)
-			pl = len(n.prefix)
+			pl = len(cn.prefix)
 
 			// LCP
 			max := pl
 			if sl < max {
 				max = sl
 			}
-			for ; l < max && search[l] == n.prefix[l]; l++ {
+			for ; l < max && search[l] == cn.prefix[l]; l++ {
 			}
 		}
 
@@ -285,7 +290,7 @@ func (n *node) find(method, path string, c Context) {
 			// Continue search
 			search = search[l:]
 		} else {
-			n = nn
+			cn = nn
 			search = ns
 			if nk == pkind {
 				goto Param
@@ -301,48 +306,49 @@ func (n *node) find(method, path string, c Context) {
 		}
 
 		// Static node
-		if child = n.findChild(search[0], skind); child != nil {
+		if child = cn.findChild(search[0], skind); child != nil {
 			// Save next
-			if n.prefix[len(n.prefix)-1] == '/' { // Issue #623
+			if cn.prefix[len(cn.prefix)-1] == '/' { // Issue #623
 				nk = pkind
-				nn = n
+				nn = cn
 				ns = search
 			}
-			n = child
+			cn = child
 			continue
 		}
 
 		// Param node
 	Param:
-		if child = n.findChildByKind(pkind); child != nil {
+		if child = cn.findChildByKind(pkind); child != nil {
 			// Issue #378
-			if len(pvalues) == nc {
+			if len(pvalues) == n {
 				continue
 			}
 
 			// Save next
-			if n.prefix[len(n.prefix)-1] == '/' { // Issue #623
+			if cn.prefix[len(cn.prefix)-1] == '/' { // Issue #623
 				nk = akind
-				nn = n
+				nn = cn
 				ns = search
 			}
 
-			n = child
+			cn = child
 			i, l := 0, len(search)
 			for ; i < l && search[i] != '/'; i++ {
 			}
-			pvalues[nc] = search[:i]
-			nc++
+			pvalues[n] = search[:i]
+
+			n++
 			search = search[i:]
 			continue
 		}
 
 		// Any node
 	Any:
-		if n = n.findChildByKind(akind); n == nil {
+		if cn = cn.findChildByKind(akind); cn == nil {
 			if nn != nil {
-				n = nn
-				nn = n.parent // Next (Issue #954)
+				cn = nn
+				nn = cn.parent // Next (Issue #954)
 				search = ns
 				if nk == pkind {
 					goto Param
@@ -354,47 +360,37 @@ func (n *node) find(method, path string, c Context) {
 			return
 		}
 
-		if len(pvalues) > 0 {
-			fmt.Println("ff")
-			pvalues[len(n.pnames)-1] = search
-		}
-
-		pnamesLength := len(n.pnames)
-		if len(pvalues) == pnamesLength {
-			pvalues[pnamesLength-1] = search
-		}
-
-		/**pnameLength := len(n.pnames) - 1
-		if len(pvalues) >= pnameLength+1 {
-			pvalues[pnameLength] = search
-		}
-		//pvalues[len(n.pnames)-1] = search**/
+		pvalues[len(cn.pnames)-1] = search
 		goto End
 	}
 
 End:
-	ctx.SetHandlers(n.findHandler(method))
-	ctx.path = n.ppath
-	ctx.pnames = n.pnames
+	ctx.SetHandlers(cn.findHandler(method))
+	ctx.path = cn.ppath
+	ctx.pnames = cn.pnames
+	for i, n := range ctx.pnames {
+		if i < len(ctx.pvalues) {
+			ctx.params[n] = ctx.pvalues[i]
+		}
+	}
 
 	// NOTE: Slow zone...
 	if ctx.GetHandlers() == nil {
-
-		ctx.SetHandlers(n.checkMethodNotAllowed())
+		ctx.SetHandlers(cn.checkMethodNotAllowed())
 
 		// Dig further for any, might have an empty value for *, e.g.
 		// serving a directory. Issue #207.
-		if n = n.findChildByKind(akind); n == nil {
+		if cn = cn.findChildByKind(akind); cn == nil {
 			return
 		}
-		if h := n.findHandler(method); h != nil {
+		if h := cn.findHandler(method); h != nil {
 			ctx.SetHandlers(h)
 		} else {
-			ctx.SetHandlers(n.checkMethodNotAllowed())
+			ctx.SetHandlers(cn.checkMethodNotAllowed())
 		}
-		ctx.path = n.ppath
-		ctx.pnames = n.pnames
-		pvalues[len(n.pnames)-1] = ""
+		ctx.path = cn.ppath
+		ctx.pnames = cn.pnames
+		pvalues[len(cn.pnames)-1] = ""
 	}
 
 	return
