@@ -22,7 +22,7 @@ type (
 		routes      map[string]*route
 		middlewares []Handler
 		after       []Handler
-		config      Config
+		config      *Config
 		maxParam    *int
 	}
 )
@@ -41,7 +41,7 @@ var (
 )
 
 // NewRouter returns a router instance
-func NewRouter(config Config) *Router {
+func NewRouter(config *Config) *Router {
 	r := &Router{
 		tree: &node{
 			methodHandler: new(methodHandler),

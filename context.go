@@ -39,7 +39,7 @@ type (
 		IsTLS() bool
 		IsWebSocket() bool
 		IsAjaxRequest() bool
-		reset(req *http.Request, res http.ResponseWriter, config Config)
+		reset(req *http.Request, res http.ResponseWriter, config *Config)
 		File(file string) error
 		SetStatusCode(code int)
 		SetHeader(header, value string)
@@ -193,7 +193,7 @@ func (c *context) Redirect(location string, code int) {
 	http.Redirect(c.response, c.request, location, code)
 }
 
-func (c *context) reset(req *http.Request, res http.ResponseWriter, config Config) {
+func (c *context) reset(req *http.Request, res http.ResponseWriter, config *Config) {
 	c.nextIndex = -1
 	c.request = req
 	c.response = res

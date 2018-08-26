@@ -45,7 +45,7 @@ type (
 
 	// Chef is the framework instance
 	Chef struct {
-		config Config
+		config *Config
 		router *Router
 		logger *utils.Logger
 	}
@@ -185,7 +185,7 @@ func (c *Chef) Logger() *utils.Logger {
 }
 
 // Config returns the application config
-func (c *Chef) Config() Config {
+func (c *Chef) Config() *Config {
 	return c.config
 }
 
