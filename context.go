@@ -208,7 +208,7 @@ func (c *context) reset(req *http.Request, res http.ResponseWriter, config *Conf
 	}
 
 	if config.Cache.Use {
-		c.cache = cache.GetDriver(config.Cache)
+		c.cache = cache.New(config.Cache)
 	}
 }
 
